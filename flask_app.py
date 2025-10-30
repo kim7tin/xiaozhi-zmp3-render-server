@@ -1,62 +1,80 @@
-
-# A very simple Flask Hello World app for you to get started with...
-
 from flask import Flask, request, jsonify
-from zmp3 import chart_home, search_song, get_song, get_stream, get_lyric
 import requests
+from zmp3 import search_song, get_stream, get_song, get_lyric
 
 app = Flask(__name__)
 
-@app.route("/test")
-def test():
-    try:
-        # Gửi request đơn giản tới một API công khai
-        r = requests.get("https://api.ipify.org?format=json", timeout=5)
-        data = r.json()
-        return jsonify({
-            "message": "Request thành công!",
-            "your_public_ip": data["ip"]
-        })
-    except Exception as e:
-        return jsonify({
-            "error": str(e)
-        }), 500
-
-
 @app.route("/stream_pcm")
 def stream_pcm():
-    song = request.args.get("song")
-    artist = request.args.get("artist")
+    song_name = request.args.get("song")
+    artist_name = request.args.get("artist")
 
-    if not song or not artist:
-        return jsonify({"error": "Missing 'song' or 'artist' parameter"}), 400
+    if not song_name:
+        return jsonify({"error": "Missing song parameter"}), 400
 
+    query = song_name
+    if artist_name:
+        query += f" {artist_name}"
+
+    # 1️⃣ Tìm bài hát
+    search_result = search_song(query)
+    if not search_result or search_result.get("err") != 0:
+        return jsonify({"error": "Search failed", "query": query})
+
+    items = search_result["data"].get("items", [])
+    if not items:
+        return jsonify({"error": "No result found", "query": query})
+
+    song_info = items[0]
+    encode_id = song_info["encodeId"]
+    title = song_info["title"]
+    artist = song_info["artistsNames"]
+    duration = song_info["duration"]
+    cover_url = song_info.get("thumbnailM")
+
+    # 2️⃣ Lấy link stream
+    stream_result = get_stream(encode_id)
+    if not stream_result or stream_result.get("err") != 0:
+        return jsonify({"error": "Get stream failed", "song_id": encode_id})
+
+    stream_data = stream_result["data"]
+    audio_url = stream_data.get("128")
+
+    if not audio_url or audio_url == "VIP":
+        return jsonify({"error": "Audio requires VIP"}), 403
+
+    # 3️⃣ Theo dõi redirect để lấy link cuối cùng
     try:
-        # Tìm kiếm bài hát
-        query = f"{song} - {artist}"
-        results = search_song(query, count=3)
-
-        if not results or "data" not in results or len(results["data"]) == 0:
-            return jsonify({"error": "No song found"}), 404
-
-        # Lấy song_id đầu tiên
-        song_id = results["data"][0]["id"]
-
-        # Lấy link stream
-        stream_info = get_stream(song_id)
-
-        return jsonify({
-            "query": query,
-            "song_id": song_id,
-            "stream": stream_info
-        })
+        final_resp = requests.get(audio_url, allow_redirects=True, timeout=10)
+        final_url = final_resp.url.replace("https://", "http://")
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        final_url = audio_url  # fallback nếu bị chặn proxy
 
-@app.route('/')
-def hello_world():
-    return 'Hello from Flask!'
+    # 4️⃣ Lấy lyric (tùy chọn)
+    lyric_info = get_lyric(encode_id)
+    if lyric_info and lyric_info.get("err") == 0:
+        lyric_url = f"/music_cache/{encode_id}.lrc"
+    else:
+        lyric_url = None
+
+    # 5️⃣ Kết quả dạng chuẩn
+    return jsonify({
+        "artist": artist,
+        "audio_url": final_url,
+        "cover_url": cover_url,
+        "duration": duration,
+        "from_cache": False,
+        "lyric_url": lyric_url,
+        "title": title
+    })
+
+
+@app.route("/test")
+def test():
+    return jsonify({"message": "Flask is running!"})
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    import os
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
