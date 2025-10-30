@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: flask-zingmp3
+    env: python
+    region: singapore     # bạn có thể đổi sang singapore hoặc oregon, frankfurt...
+    plan: free            # sử dụng gói miễn phí
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn flask_app:app"
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
